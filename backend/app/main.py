@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.schemas import (
@@ -8,7 +8,21 @@ from app.schemas import (
     TransferRequest,
     ReceiveRequest,
     TemperatureRequest,
+    RegisterRequest,
+    LoginRequest,
 )
+
+from app.data_store import batches, users
+
+from app.auth import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_access_token,
+)
+
+
+
 from app.services import blockchain_service
 from app.services import supabase_service as db
 from app.services.verification import verify_batch
@@ -39,6 +53,139 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# =========================================================
+# AUTHENTICATION
+# =========================================================
+
+@app.post("/api/auth/register")
+def register_user(request: RegisterRequest):
+
+    email = request.email.lower().strip()
+
+    # Check if email already exists
+    if email in users:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Create user
+    users[email] = {
+        "full_name": request.full_name,
+        "organization": request.organization,
+        "email": email,
+        "password": hash_password(request.password),
+        "role": request.role,
+    }
+
+    return {
+        "success": True,
+        "message": "Registration successful",
+        "user": {
+            "full_name": request.full_name,
+            "organization": request.organization,
+            "email": email,
+            "role": request.role,
+        }
+    }
+
+
+@app.post("/api/auth/login")
+def login_user(request: LoginRequest):
+
+    email = request.email.lower().strip()
+
+    user = users.get(email)
+
+    # User doesn't exist
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Password check
+    if not verify_password(
+        request.password,
+        user["password"]
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
+
+    # Create JWT
+    token = create_access_token({
+        "sub": email,
+        "role": user["role"],
+    })
+
+    return {
+        "success": True,
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "full_name": user["full_name"],
+            "organization": user["organization"],
+            "email": user["email"],
+            "role": user["role"],
+        }
+    }
+
+
+@app.get("/api/auth/me")
+def get_current_user(
+    authorization: str | None = Header(default=None)
+):
+
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization header missing"
+        )
+
+    # Expected format:
+    # Bearer <token>
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization format"
+        )
+
+    token = authorization.replace(
+        "Bearer ",
+        "",
+        1
+    ).strip()
+
+    payload = decode_access_token(token)
+
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
+
+    email = payload.get("sub")
+
+    user = users.get(email)
+
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    return {
+        "success": True,
+        "user": {
+            "full_name": user["full_name"],
+            "organization": user["organization"],
+            "email": user["email"],
+            "role": user["role"],
+        }
+    }
 
 
 # =========================================================

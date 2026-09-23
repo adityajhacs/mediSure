@@ -31,3 +31,18 @@ class ReceiveRequest(BaseModel):
 class TemperatureRequest(BaseModel):
     batch_id: str
     temperature: float
+# =========================================================
+# AUTH SCHEMAS
+# =========================================================
+
+class RegisterRequest(BaseModel):
+    full_name: str = Field(..., min_length=2)
+    organization: str = Field(..., min_length=2)
+    email: str = Field(..., min_length=5)
+    password: str = Field(..., min_length=6)
+    role: Literal["MANUFACTURER", "DISTRIBUTOR", "PHARMACY"]
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=5)
+    password: str = Field(..., min_length=6)

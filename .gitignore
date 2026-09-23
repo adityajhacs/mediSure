@@ -1,13 +1,31 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 
 # Environment / secrets
+.env
+.env.local
+.env.*.local
 backend/.env
 backend/fabric-gateway/.env
 
 # Node dependencies
+node_modules/
 backend/fabric-gateway/node_modules/
 
-# Blockchain belongs to the separate blockchain branch
+# Next.js
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Blockchain branch is maintained separately
 /blockchain/
