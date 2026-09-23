@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.data_store import batches
 from app.schemas import (
     BatchCreateRequest,
     TransferRequest,
@@ -11,6 +10,7 @@ from app.schemas import (
     TemperatureRequest,
 )
 from app.services import blockchain_service
+from app.services import supabase_service as db
 from app.services.verification import verify_batch
 
 
@@ -49,23 +49,38 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def get_full_batch_or_404(batch_id: str):
+    batch = db.get_batch_full(batch_id)
+
+    if not batch:
+        raise HTTPException(
+            status_code=404,
+            detail="Batch not found",
+        )
+
+    return batch
+
+
 # =========================================================
-# ROOT API
+# ROOT
 # =========================================================
 
 @app.get("/")
 def root():
     return {
         "message": "MediTrace Backend is running",
-        "status": "OK"
+        "status": "OK",
     }
+
+
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
         "service": "MediTrace Backend",
-        "version": "1.0.0"
+        "version": "1.0.0",
     }
+
 
 # =========================================================
 # GET ALL BATCHES
@@ -73,10 +88,11 @@ def health_check():
 
 @app.get("/api/batches")
 def get_all_batches():
+    batches = db.get_all_batches_full()
 
     return {
         "count": len(batches),
-        "batches": list(batches.values())
+        "batches": batches,
     }
 
 
@@ -87,94 +103,77 @@ def get_all_batches():
 @app.post("/api/batches")
 def create_batch(request: BatchCreateRequest):
 
-    # Check duplicate batch
-    if request.batch_number in batches:
+    existing = db.get_batch(request.batch_number)
+
+    if existing:
         raise HTTPException(
             status_code=409,
-            detail="Batch already exists"
+            detail="Batch already exists",
         )
 
-    # Validate dates
     if request.expiry_date <= request.manufacturing_date:
         raise HTTPException(
             status_code=400,
-            detail="Expiry date must be after manufacturing date"
+            detail="Expiry date must be after manufacturing date",
         )
 
-    # Validate temperature range
     if request.min_temperature >= request.max_temperature:
         raise HTTPException(
             status_code=400,
-            detail="Minimum temperature must be lower than maximum temperature"
+            detail="Minimum temperature must be lower than maximum temperature",
         )
 
-    # Call mock blockchain
-    blockchain_tx_id = blockchain_service.create_batch(
-        request.batch_number
-    )
+    try:
+        blockchain_tx_id = blockchain_service.create_batch(
+            batch_id=request.batch_number,
+            medicine_name=request.medicine_name,
+            quantity=request.quantity,
+            manufacturer=request.manufacturer,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Blockchain CreateBatch failed: {exc}",
+        ) from exc
 
-    # Create batch object
-    batch = {
+    created_at = now_iso()
+
+    batch_data = {
         "batch_id": request.batch_number,
-
         "medicine_name": request.medicine_name,
-
         "quantity": request.quantity,
-
-        "manufacturing_date": str(
-            request.manufacturing_date
-        ),
-
-        "expiry_date": str(
-            request.expiry_date
-        ),
-
+        "manufacturing_date": str(request.manufacturing_date),
+        "expiry_date": str(request.expiry_date),
         "min_temperature": request.min_temperature,
-
         "max_temperature": request.max_temperature,
-
-        # Supply chain
         "manufacturer": request.manufacturer,
         "distributor": None,
         "pharmacy": None,
-
-        # Ownership
         "current_owner": request.manufacturer,
-
-        # Pending transfer
         "pending_receiver": None,
         "pending_stage": None,
-
-        # Status
         "status": "CREATED",
-
-        # Blockchain
         "blockchain_verified": True,
         "blockchain_tx_id": blockchain_tx_id,
-
-        # Temperature
         "temperature_status": "SAFE",
-        "temperature_logs": [],
-        "alerts": [],
-
-        # QR code
         "qr_code": request.batch_number,
-
-        # History
-        "history": [
-            {
-                "action": "CREATED",
-                "actor": request.manufacturer,
-                "timestamp": now_iso(),
-                "blockchain_tx_id": blockchain_tx_id
-            }
-        ],
-
-        "created_at": now_iso()
+        "created_at": created_at,
     }
 
-    # Save temporarily
-    batches[request.batch_number] = batch
+    try:
+        db.create_batch(batch_data)
+
+        db.add_history(
+            batch_id=request.batch_number,
+            action="CREATED",
+            actor=request.manufacturer,
+            blockchain_tx_id=blockchain_tx_id,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database save failed after blockchain transaction: {exc}",
+        ) from exc
 
     return {
         "success": True,
@@ -182,7 +181,7 @@ def create_batch(request: BatchCreateRequest):
         "batch_id": request.batch_number,
         "status": "CREATED",
         "qr_code": request.batch_number,
-        "blockchain_tx_id": blockchain_tx_id
+        "blockchain_tx_id": blockchain_tx_id,
     }
 
 
@@ -192,16 +191,7 @@ def create_batch(request: BatchCreateRequest):
 
 @app.get("/api/batches/{batch_id}")
 def get_batch(batch_id: str):
-
-    batch = batches.get(batch_id)
-
-    if not batch:
-        raise HTTPException(
-            status_code=404,
-            detail="Batch not found"
-        )
-
-    return batch
+    return get_full_batch_or_404(batch_id)
 
 
 # =========================================================
@@ -211,16 +201,10 @@ def get_batch(batch_id: str):
 @app.post("/api/batches/{batch_id}/transfer")
 def transfer_batch(
     batch_id: str,
-    request: TransferRequest
+    request: TransferRequest,
 ):
 
-    batch = batches.get(batch_id)
-
-    if not batch:
-        raise HTTPException(
-            status_code=404,
-            detail="Batch not found"
-        )
+    batch = get_full_batch_or_404(batch_id)
 
     # -----------------------------------------------------
     # Manufacturer → Distributor
@@ -233,23 +217,38 @@ def transfer_batch(
 
         from_org = batch["current_owner"]
 
-        tx_id = blockchain_service.transfer_batch(
+        try:
+            tx_id = blockchain_service.transfer_batch(
+                batch_id,
+                from_org,
+                request.to_org,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Blockchain TransferBatch failed: {exc}",
+            ) from exc
+
+        db.update_batch(
             batch_id,
-            from_org,
-            request.to_org
+            {
+                "current_owner": request.to_org,
+                "pending_receiver": request.to_org,
+                "pending_stage": "DISTRIBUTOR",
+                "status": "IN_TRANSIT",
+                "blockchain_verified": True,
+                "blockchain_tx_id": tx_id,
+            },
         )
 
-        batch["pending_receiver"] = request.to_org
-        batch["pending_stage"] = "DISTRIBUTOR"
-        batch["status"] = "IN_TRANSIT"
-
-        batch["history"].append({
-            "action": "TRANSFERRED",
-            "from": from_org,
-            "to": request.to_org,
-            "timestamp": now_iso(),
-            "blockchain_tx_id": tx_id
-        })
+        db.add_history(
+            batch_id=batch_id,
+            action="TRANSFERRED",
+            from_org=from_org,
+            to_org=request.to_org,
+            stage="DISTRIBUTOR",
+            blockchain_tx_id=tx_id,
+        )
 
         return {
             "success": True,
@@ -257,9 +256,8 @@ def transfer_batch(
             "status": "IN_TRANSIT",
             "from": from_org,
             "to": request.to_org,
-            "blockchain_tx_id": tx_id
+            "blockchain_tx_id": tx_id,
         }
-
 
     # -----------------------------------------------------
     # Distributor → Pharmacy
@@ -272,23 +270,38 @@ def transfer_batch(
 
         from_org = batch["current_owner"]
 
-        tx_id = blockchain_service.transfer_batch(
+        try:
+            tx_id = blockchain_service.transfer_batch(
+                batch_id,
+                from_org,
+                request.to_org,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Blockchain TransferBatch failed: {exc}",
+            ) from exc
+
+        db.update_batch(
             batch_id,
-            from_org,
-            request.to_org
+            {
+                "current_owner": request.to_org,
+                "pending_receiver": request.to_org,
+                "pending_stage": "PHARMACY",
+                "status": "IN_TRANSIT",
+                "blockchain_verified": True,
+                "blockchain_tx_id": tx_id,
+            },
         )
 
-        batch["pending_receiver"] = request.to_org
-        batch["pending_stage"] = "PHARMACY"
-        batch["status"] = "IN_TRANSIT"
-
-        batch["history"].append({
-            "action": "TRANSFERRED",
-            "from": from_org,
-            "to": request.to_org,
-            "timestamp": now_iso(),
-            "blockchain_tx_id": tx_id
-        })
+        db.add_history(
+            batch_id=batch_id,
+            action="TRANSFERRED",
+            from_org=from_org,
+            to_org=request.to_org,
+            stage="PHARMACY",
+            blockchain_tx_id=tx_id,
+        )
 
         return {
             "success": True,
@@ -296,13 +309,12 @@ def transfer_batch(
             "status": "IN_TRANSIT",
             "from": from_org,
             "to": request.to_org,
-            "blockchain_tx_id": tx_id
+            "blockchain_tx_id": tx_id,
         }
-
 
     raise HTTPException(
         status_code=400,
-        detail="Invalid transfer for current batch status/stage"
+        detail="Invalid transfer for current batch status/stage",
     )
 
 
@@ -313,83 +325,109 @@ def transfer_batch(
 @app.post("/api/batches/{batch_id}/receive")
 def receive_batch(
     batch_id: str,
-    request: ReceiveRequest
+    request: ReceiveRequest,
 ):
 
-    batch = batches.get(batch_id)
+    batch = get_full_batch_or_404(batch_id)
 
-    if not batch:
-        raise HTTPException(
-            status_code=404,
-            detail="Batch not found"
-        )
-
-    # Must be in transit
     if batch["status"] != "IN_TRANSIT":
         raise HTTPException(
             status_code=400,
-            detail="Batch is not currently in transit"
+            detail="Batch is not currently in transit",
         )
 
-    # Check stage
     if batch["pending_stage"] != request.stage:
         raise HTTPException(
             status_code=400,
-            detail="Receiving stage does not match transfer stage"
+            detail="Receiving stage does not match transfer stage",
         )
 
-    # Check receiver
     if batch["pending_receiver"] != request.received_by:
         raise HTTPException(
             status_code=400,
-            detail="Receiver does not match pending receiver"
+            detail="Receiver does not match pending receiver",
         )
 
-    # Blockchain receive
-    tx_id = blockchain_service.receive_batch(
-        batch_id,
-        request.received_by
-    )
-
-    # -----------------------------------------------------
-    # Distributor receives
-    # -----------------------------------------------------
+    try:
+        receive_tx_id = blockchain_service.receive_batch(
+            batch_id,
+            request.received_by,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Blockchain ReceiveBatch failed: {exc}",
+        ) from exc
 
     if request.stage == "DISTRIBUTOR":
 
-        batch["distributor"] = request.received_by
-        batch["current_owner"] = request.received_by
-        batch["status"] = "RECEIVED"
-
-
-    # -----------------------------------------------------
-    # Pharmacy receives
-    # -----------------------------------------------------
+        db.update_batch(
+            batch_id,
+            {
+                "distributor": request.received_by,
+                "current_owner": request.received_by,
+                "status": "RECEIVED",
+                "pending_receiver": None,
+                "pending_stage": None,
+                "blockchain_verified": True,
+                "blockchain_tx_id": receive_tx_id,
+            },
+        )
 
     elif request.stage == "PHARMACY":
 
-        batch["pharmacy"] = request.received_by
-        batch["current_owner"] = request.received_by
-        batch["status"] = "AT_PHARMACY"
+        try:
+            pharmacy_tx_id = blockchain_service.mark_at_pharmacy(
+                batch_id
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Batch was received on blockchain, "
+                    f"but MarkAtPharmacy failed: {exc}"
+                ),
+            ) from exc
 
+        db.update_batch(
+            batch_id,
+            {
+                "pharmacy": request.received_by,
+                "current_owner": request.received_by,
+                "status": "AT_PHARMACY",
+                "pending_receiver": None,
+                "pending_stage": None,
+                "blockchain_verified": True,
+                "blockchain_tx_id": pharmacy_tx_id,
+            },
+        )
 
-    batch["pending_receiver"] = None
-    batch["pending_stage"] = None
+        db.add_history(
+            batch_id=batch_id,
+            action="MARKED_AT_PHARMACY",
+            actor=request.received_by,
+            stage="PHARMACY",
+            blockchain_tx_id=pharmacy_tx_id,
+        )
 
-    batch["history"].append({
-        "action": "RECEIVED",
-        "actor": request.received_by,
-        "stage": request.stage,
-        "timestamp": now_iso(),
-        "blockchain_tx_id": tx_id
-    })
+    db.add_history(
+        batch_id=batch_id,
+        action="RECEIVED",
+        actor=request.received_by,
+        stage=request.stage,
+        blockchain_tx_id=receive_tx_id,
+    )
 
     return {
         "success": True,
         "batch_id": batch_id,
-        "status": batch["status"],
+        "status": (
+            "RECEIVED"
+            if request.stage == "DISTRIBUTOR"
+            else "AT_PHARMACY"
+        ),
         "received_by": request.received_by,
-        "blockchain_tx_id": tx_id
+        "blockchain_tx_id": receive_tx_id,
     }
 
 
@@ -399,21 +437,20 @@ def receive_batch(
 
 @app.post("/api/temperature")
 def add_temperature(
-    request: TemperatureRequest
+    request: TemperatureRequest,
 ):
 
-    batch = batches.get(request.batch_id)
+    batch = db.get_batch(request.batch_id)
 
     if not batch:
         raise HTTPException(
             status_code=404,
-            detail="Batch not found"
+            detail="Batch not found",
         )
 
     minimum = batch["min_temperature"]
     maximum = batch["max_temperature"]
 
-    # Check temperature range
     is_safe = (
         minimum <= request.temperature <= maximum
     )
@@ -424,43 +461,51 @@ def add_temperature(
         else "VIOLATION"
     )
 
-    # Create temperature log
-    log = {
-        "temperature": request.temperature,
-        "status": temperature_status,
-        "timestamp": now_iso()
-    }
+    try:
+        db.add_temperature(
+            batch_id=request.batch_id,
+            temperature=request.temperature,
+            status=temperature_status,
+        )
 
-    batch["temperature_logs"].append(log)
+        if not is_safe:
+            db.add_alert(
+                batch_id=request.batch_id,
+                alert_type="TEMPERATURE",
+                message=(
+                    f"Temperature {request.temperature}°C "
+                    f"is outside allowed range "
+                    f"{minimum}°C - {maximum}°C"
+                ),
+                severity="HIGH",
+            )
 
-    # Temperature violation
-    if not is_safe:
+            db.update_batch(
+                request.batch_id,
+                {
+                    "temperature_status": "VIOLATION",
+                },
+            )
 
-        batch["temperature_status"] = "VIOLATION"
+        elif batch["temperature_status"] != "VIOLATION":
+            db.update_batch(
+                request.batch_id,
+                {
+                    "temperature_status": "SAFE",
+                },
+            )
 
-        batch["alerts"].append({
-            "type": "TEMPERATURE",
-            "message": (
-                f"Temperature {request.temperature}°C "
-                f"is outside allowed range "
-                f"{minimum}°C - {maximum}°C"
-            ),
-            "severity": "HIGH",
-            "timestamp": now_iso()
-        })
-
-    # Safe temperature
-    else:
-
-        # Don't remove a previous violation
-        if batch["temperature_status"] != "VIOLATION":
-            batch["temperature_status"] = "SAFE"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save temperature data: {exc}",
+        ) from exc
 
     return {
         "success": True,
         "batch_id": request.batch_id,
         "temperature": request.temperature,
-        "temperature_status": temperature_status
+        "temperature_status": temperature_status,
     }
 
 
@@ -470,22 +515,22 @@ def add_temperature(
 
 @app.get("/api/batches/{batch_id}/temperature")
 def get_temperature_history(
-    batch_id: str
+    batch_id: str,
 ):
 
-    batch = batches.get(batch_id)
+    batch = db.get_batch(batch_id)
 
     if not batch:
         raise HTTPException(
             status_code=404,
-            detail="Batch not found"
+            detail="Batch not found",
         )
 
     return {
         "batch_id": batch_id,
         "current_status": batch["temperature_status"],
-        "logs": batch["temperature_logs"],
-        "alerts": batch["alerts"]
+        "logs": db.get_temperature_logs(batch_id),
+        "alerts": db.get_alerts(batch_id),
     }
 
 
@@ -495,20 +540,18 @@ def get_temperature_history(
 
 @app.get("/api/batches/{batch_id}/history")
 def get_batch_history(
-    batch_id: str
+    batch_id: str,
 ):
 
-    batch = batches.get(batch_id)
-
-    if not batch:
+    if not db.get_batch(batch_id):
         raise HTTPException(
             status_code=404,
-            detail="Batch not found"
+            detail="Batch not found",
         )
 
     return {
         "batch_id": batch_id,
-        "history": batch["history"]
+        "history": db.get_batch_history(batch_id),
     }
 
 
@@ -519,17 +562,40 @@ def get_batch_history(
 @app.get("/api/verify/{batch_id}")
 def verify(batch_id: str):
 
-    batch = batches.get(batch_id)
+    batch = db.get_batch_full(batch_id)
 
-    # Fake / unknown QR
     if not batch:
-
         return {
             "batch_id": batch_id,
             "status": "SUSPICIOUS",
             "reason": "Batch could not be verified",
-            "trust_score": 0
+            "trust_score": 0,
         }
 
-    # Existing batch
+    # -----------------------------------------------------
+    # Verify live blockchain state
+    # -----------------------------------------------------
+
+    try:
+        blockchain_batch = blockchain_service.get_batch(
+            batch_id
+        )
+
+        batch["blockchain_verified"] = (
+            blockchain_batch.get("batchId") == batch_id
+            and blockchain_batch.get("medicineName")
+            == batch.get("medicine_name")
+            and blockchain_batch.get("quantity")
+            == batch.get("quantity")
+            and blockchain_batch.get("manufacturer")
+            == batch.get("manufacturer")
+            and blockchain_batch.get("currentOwner")
+            == batch.get("current_owner")
+            and blockchain_batch.get("status")
+            == batch.get("status")
+        )
+
+    except Exception:
+        batch["blockchain_verified"] = False
+
     return verify_batch(batch)

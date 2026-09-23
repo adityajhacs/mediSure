@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Environment / secrets
+backend/.env
+backend/fabric-gateway/.env
+
+# Node dependencies
+backend/fabric-gateway/node_modules/
+
+# Blockchain belongs to the separate blockchain branch
+/blockchain/
