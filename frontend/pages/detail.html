@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mediSure Shipment Details</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-[#F8FAFC]">
+
+  <!-- Navbar -->
+  <nav class="border-b border-[#E4E7EC] bg-white">
+    <div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+      <div class="flex items-center gap-2">
+        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-[#00A878] text-white">🛡</div>
+        <span class="text-xl font-bold">
+          <span class="text-[#101828]">medi</span><span class="text-[#F97316]">Sure</span>
+        </span>
+      </div>
+      <div class="flex gap-6 text-sm font-medium">
+        <a href="dashboard.html" class="text-[#475467] hover:text-[#00A878]">Back to Dashboard</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Shipment Details Card -->
+  <div class="mx-auto mt-10 max-w-4xl rounded-2xl border border-[#E4E7EC] bg-white p-8 shadow-sm">
+    <h2 class="text-3xl font-bold text-[#101828] mb-6">Shipment Details</h2>
+
+    <div id="shipmentInfo" class="space-y-4">
+      <!-- Data will be added by temperature.js -->
+    </div>
+
+    <button id="transferBtn"
+      class="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#00A878] px-6 py-3 font-semibold text-white transition hover:bg-[#008F68] hover:-translate-y-0.5">
+      Transfer to Pharmacy
+    </button>
+  </div>
+
+  <script src="../components/temperature.js"></script>
+</body>
+</html>
