@@ -2,7 +2,7 @@ def verify_batch(batch: dict) -> dict:
     """
     Checks whether a medicine batch can be verified.
 
-    For today's MVP, verification is based on:
+    Verification is based on:
     1. Manufacturer
     2. Distributor
     3. Pharmacy
@@ -57,7 +57,7 @@ def verify_batch(batch: dict) -> dict:
     # -----------------------------
 
     supply_chain_complete = (
-        batch.get("status") == "AT_PHARMACY"
+        batch.get("status") in ["AT_PHARMACY", "AVAILABLE"]
     )
 
     verified = (

@@ -1,30 +1,47 @@
+import os
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
+from dotenv import load_dotenv
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
+load_dotenv()
 
-SECRET_KEY = "medisure-dev-secret-key-change-later"
+SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY",
+    "medisure-dev-secret-change-later",
+)
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto"
-)
-
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    password_bytes = password.encode("utf-8")
+
+    if len(password_bytes) > 72:
+        raise ValueError(
+            "Password cannot be longer than 72 bytes"
+        )
+
+    return bcrypt.hashpw(
+        password_bytes,
+        bcrypt.gensalt(),
+    ).decode("utf-8")
 
 
 def verify_password(
     plain_password: str,
-    hashed_password: str
+    hashed_password: str,
 ) -> bool:
-    return pwd_context.verify(
-        plain_password,
-        hashed_password
+    password_bytes = plain_password.encode("utf-8")
+
+    if len(password_bytes) > 72:
+        return False
+
+    return bcrypt.checkpw(
+        password_bytes,
+        hashed_password.encode("utf-8"),
     )
 
 
@@ -36,25 +53,22 @@ def create_access_token(data: dict) -> str:
     )
 
     to_encode.update({
-        "exp": expire
+        "exp": expire,
     })
 
     return jwt.encode(
         to_encode,
         SECRET_KEY,
-        algorithm=ALGORITHM
+        algorithm=ALGORITHM,
     )
 
 
 def decode_access_token(token: str) -> dict | None:
     try:
-        payload = jwt.decode(
+        return jwt.decode(
             token,
             SECRET_KEY,
-            algorithms=[ALGORITHM]
+            algorithms=[ALGORITHM],
         )
-
-        return payload
-
     except JWTError:
         return None

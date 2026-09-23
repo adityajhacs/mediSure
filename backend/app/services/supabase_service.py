@@ -271,3 +271,276 @@ def get_alerts(batch_id: str) -> List[Dict[str, Any]]:
     )
 
     return result.data or []
+
+def get_user_by_email(email: str):
+    result = (
+        supabase
+        .table("users")
+        .select("*")
+        .eq("email", email.lower().strip())
+        .limit(1)
+        .execute()
+    )
+
+    if not result.data:
+        return None
+
+    return result.data[0]
+
+
+def create_user(
+    full_name: str,
+    organization: str,
+    email: str,
+    password_hash: str,
+    role: str,
+):
+    payload = {
+        "full_name": full_name,
+        "organization": organization,
+        "email": email.lower().strip(),
+        "password_hash": password_hash,
+        "role": role,
+    }
+
+    result = (
+        supabase
+        .table("users")
+        .insert(payload)
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError("Failed to create user in Supabase")
+
+    return result.data[0]
+def get_all_alerts():
+    result = (
+        supabase
+        .table("alerts")
+        .select("*")
+        .order("timestamp", desc=True)
+        .execute()
+    )
+
+    return result.data or []
+
+# =========================================================
+# MEDICINE CRUD
+# =========================================================
+
+def create_medicine(data: dict):
+    result = (
+        supabase
+        .table("medicines")
+        .insert(data)
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError("Failed to create medicine")
+
+    return result.data[0]
+
+
+def list_medicines():
+    result = (
+        supabase
+        .table("medicines")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data or []
+
+
+def get_medicine(medicine_id: int):
+    result = (
+        supabase
+        .table("medicines")
+        .select("*")
+        .eq("id", medicine_id)
+        .limit(1)
+        .execute()
+    )
+
+    return result.data[0] if result.data else None
+
+
+# =========================================================
+# ORGANIZATION CRUD
+# =========================================================
+
+def create_organization(data: dict):
+    result = (
+        supabase
+        .table("organizations")
+        .insert(data)
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError("Failed to create organization")
+
+    return result.data[0]
+
+
+def list_organizations():
+    result = (
+        supabase
+        .table("organizations")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data or []
+
+
+def get_organization(organization_id: int):
+    result = (
+        supabase
+        .table("organizations")
+        .select("*")
+        .eq("id", organization_id)
+        .limit(1)
+        .execute()
+    )
+
+    return result.data[0] if result.data else None
+
+
+# =========================================================
+# PRODUCT CRUD
+# =========================================================
+
+def create_product(data: dict):
+    result = (
+        supabase
+        .table("products")
+        .insert(data)
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError("Failed to create product")
+
+    return result.data[0]
+
+
+def list_products():
+    result = (
+        supabase
+        .table("products")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+    )
+
+    return result.data or []
+
+
+def get_product(product_id: str):
+    result = (
+        supabase
+        .table("products")
+        .select("*")
+        .eq("product_id", product_id)
+        .limit(1)
+        .execute()
+    )
+
+    return result.data[0] if result.data else None
+def get_batch_transactions(batch_id: str):
+    result = (
+        supabase
+        .table("transactions")
+        .select("*")
+        .eq("batch_id", batch_id)
+        .order("timestamp", desc=False)
+        .execute()
+    )
+
+    return result.data or []
+
+
+def update_product_qr(
+    product_id: str,
+    qr_commitment: str,
+    qr_proof: str,
+):
+    result = (
+        supabase
+        .table("products")
+        .update({
+            "qr_commitment": qr_commitment,
+            "qr_proof": qr_proof,
+        })
+        .eq("product_id", product_id)
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError(
+            f"Failed to update QR proof for {product_id}"
+        )
+
+    return result.data[0]
+def add_scan(
+    product_id: str,
+    scan_source: str = "QR",
+    ip_address: str | None = None,
+):
+    result = (
+        supabase
+        .table("scan_history")
+        .insert({
+            "product_id": product_id,
+            "scan_source": scan_source,
+            "ip_address": ip_address,
+        })
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError("Failed to save scan history")
+
+    return result.data[0]
+
+
+def get_scan_history(product_id: str):
+    result = (
+        supabase
+        .table("scan_history")
+        .select("*")
+        .eq("product_id", product_id)
+        .order("scanned_at", desc=False)
+        .execute()
+    )
+
+    return result.data or []
+def add_temperature_with_location(
+    batch_id: str,
+    temperature: float,
+    status: str,
+    location: str | None = None,
+):
+    result = (
+        supabase
+        .table("temperature_logs")
+        .insert({
+            "batch_id": batch_id,
+            "temperature": temperature,
+            "status": status,
+            "location": location,
+        })
+        .execute()
+    )
+
+    if not result.data:
+        raise RuntimeError(
+            f"Failed to save temperature for {batch_id}"
+        )
+
+    return result.data[0]

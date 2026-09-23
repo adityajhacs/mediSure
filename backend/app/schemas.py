@@ -31,6 +31,7 @@ class ReceiveRequest(BaseModel):
 class TemperatureRequest(BaseModel):
     batch_id: str
     temperature: float
+    location: str | None = None
 # =========================================================
 # AUTH SCHEMAS
 # =========================================================
@@ -46,3 +47,42 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., min_length=5)
     password: str = Field(..., min_length=6)
+# =========================================================
+# MEDICINE SCHEMAS
+# =========================================================
+
+class MedicineCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2)
+    dosage: str = Field(..., min_length=1)
+    form: str = Field(..., min_length=2)
+
+
+# =========================================================
+# ORGANIZATION SCHEMAS
+# =========================================================
+
+class OrganizationCreateRequest(BaseModel):
+    name: str = Field(..., min_length=2)
+    type: Literal[
+        "MANUFACTURER",
+        "DISTRIBUTOR",
+        "PHARMACY",
+    ]
+    license_number: str = Field(..., min_length=2)
+    address: str = Field(..., min_length=2)
+
+
+# =========================================================
+# PRODUCT SCHEMAS
+# =========================================================
+
+class ProductCreateRequest(BaseModel):
+    product_id: str = Field(..., min_length=2)
+    batch_id: str = Field(..., min_length=2)
+    serial_number: str = Field(..., min_length=2)
+    qr_payload: str = Field(..., min_length=2)
+    status: Literal[
+        "ACTIVE",
+        "SOLD",
+        "RECALLED",
+    ] = "ACTIVE"

@@ -3,3 +3,5 @@ uvicorn[standard]
 pydantic
 supabase
 python-dotenv
+python-jose[cryptography]
+bcrypt
