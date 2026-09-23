@@ -544,3 +544,36 @@ def add_temperature_with_location(
         )
 
     return result.data[0]
+
+def get_medicine_by_name(name: str):
+    result = (
+        supabase
+        .table("medicines")
+        .select("*")
+        .eq("name", name)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+def get_organization_by_name(name: str):
+    result = (
+        supabase
+        .table("organizations")
+        .select("*")
+        .eq("name", name)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+def get_products_by_batch(batch_id: str):
+    result = (
+        supabase
+        .table("products")
+        .select("*")
+        .eq("batch_id", batch_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []

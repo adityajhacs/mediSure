@@ -83,9 +83,133 @@ const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 
     setSuccess("Registration successful! Redirecting to login...");
 
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+  e.preventDefault();
+
+  setError("");
+  setSuccess("");
+
+  const formData = new FormData(e.currentTarget);
+
+  const full_name = String(formData.get("full_name") || "").trim();
+  const organization = String(formData.get("organization") || "").trim();
+  const email = String(formData.get("email") || "").trim();
+  const password = String(formData.get("password") || "");
+  const confirm_password = String(
+    formData.get("confirm_password") || ""
+  );
+
+  if (password !== confirm_password) {
+    setError("Passwords do not match.");
+    return;
+  }
+
+  if (password.length < 8) {
+    setError("Password must be at least 8 characters.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const API_URL =
+      process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+
+    // ================= REGISTER =================
+
+    const registerResponse = await fetch(
+      `${API_URL}/api/auth/register`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          full_name,
+          organization,
+          email,
+          password,
+          role: portal.toUpperCase(),
+        }),
+      }
+    );
+
+    const registerData = await registerResponse.json();
+
+    if (!registerResponse.ok) {
+      throw new Error(
+        registerData.detail || "Registration failed."
+      );
+    }
+
+    setSuccess(
+      "Registration successful! Signing you in..."
+    );
+
+    // ================= AUTO LOGIN =================
+
+    const loginResponse = await fetch(
+      `${API_URL}/api/auth/login`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          password,
+        }),
+      }
+    );
+
+    const loginData = await loginResponse.json();
+
+    if (!loginResponse.ok) {
+      throw new Error(
+        loginData.detail ||
+          "Registration successful, but automatic login failed."
+      );
+    }
+
+    // ================= SAVE SESSION =================
+
+    localStorage.setItem(
+      "access_token",
+      loginData.access_token
+    );
+
+    localStorage.setItem(
+      "user",
+      JSON.stringify(loginData.user)
+    );
+
+    // ================= ROLE REDIRECT =================
+
+    const role = String(
+      loginData.user?.role || ""
+    ).toLowerCase();
+
     setTimeout(() => {
-      router.push("/login");
-    }, 1200);
+      if (role === "manufacturer") {
+        router.push("/manufacturer/dashboard");
+      } else if (role === "distributor") {
+        router.push("/distributor/dashboard");
+      } else if (role === "pharmacy") {
+        router.push("/pharmacy/dashboard");
+      } else {
+        router.push("/");
+      }
+    }, 800);
+  } catch (err) {
+    setError(
+      err instanceof Error
+        ? err.message
+        : "Something went wrong. Please try again."
+    );
+  } finally {
+    setLoading(false);
+  }
+};
   } catch (err) {
     setError(
       err instanceof Error

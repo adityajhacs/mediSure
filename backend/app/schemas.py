@@ -9,6 +9,9 @@ class BatchCreateRequest(BaseModel):
     batch_number: str = Field(..., min_length=2)
     quantity: int = Field(..., gt=0)
 
+    medicine_id: int | None = None
+    manufacturer_id: int | None = None
+
     manufacturing_date: date
     expiry_date: date
 
@@ -16,7 +19,6 @@ class BatchCreateRequest(BaseModel):
     max_temperature: float
 
     manufacturer: str = Field(..., min_length=2)
-
 
 class TransferRequest(BaseModel):
     to_org: str = Field(..., min_length=2)
@@ -51,10 +53,16 @@ class LoginRequest(BaseModel):
 # MEDICINE SCHEMAS
 # =========================================================
 
+# =========================================================
+# MEDICINE SCHEMAS
+# =========================================================
+
 class MedicineCreateRequest(BaseModel):
-    name: str = Field(..., min_length=2)
-    dosage: str = Field(..., min_length=1)
-    form: str = Field(..., min_length=2)
+    medicine_name: str = Field(..., min_length=2)
+    medicine_type: str = Field(..., min_length=2)
+    manufacturer: str = Field(..., min_length=2)
+    min_temperature: float
+    max_temperature: float
 
 
 # =========================================================

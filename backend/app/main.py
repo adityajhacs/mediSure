@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-
+import re
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -904,37 +904,118 @@ def get_verification_payload(batch_id: str):
 # MEDICINES
 # =========================================================
 
+# =========================================================
+# MEDICINES
+# =========================================================
+
+def extract_dosage(medicine_name: str) -> str:
+    """
+    Extract a simple dosage/strength from medicine name.
+    Example:
+    Paracetamol 500mg -> 500mg
+    Amoxicillin 250 mg -> 250 mg
+    """
+
+    match = re.search(
+        r"(\d+(?:\.\d+)?\s*(?:mg|g|mcg|µg|ml|mL|IU|%))",
+        medicine_name,
+        re.IGNORECASE,
+    )
+
+    if match:
+        return match.group(1)
+
+    return "Not specified"
+
+
+def format_medicine(medicine: dict) -> dict:
+    """
+    Keep existing DB fields while also exposing
+    the exact names expected by the current frontend.
+    """
+
+    result = dict(medicine)
+
+    result["medicine_name"] = (
+        medicine.get("name")
+        or medicine.get("medicine_name")
+    )
+
+    result["medicine_type"] = (
+        medicine.get("form")
+        or medicine.get("medicine_type")
+    )
+
+    return result
+
+
 @app.post("/api/medicines")
 def create_medicine(request: MedicineCreateRequest):
 
+    if request.min_temperature >= request.max_temperature:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Minimum temperature must be lower "
+                "than maximum temperature"
+            ),
+        )
+
+    dosage = extract_dosage(
+        request.medicine_name
+    )
+
+    medicine_data = {
+        # Existing medicine table fields
+        "name": request.medicine_name,
+        "dosage": dosage,
+        "form": request.medicine_type,
+
+        # New fields
+        "manufacturer": request.manufacturer,
+        "min_temperature": request.min_temperature,
+        "max_temperature": request.max_temperature,
+    }
+
     try:
-        return {
-            "success": True,
-            "medicine": db.create_medicine({
-                "name": request.name,
-                "dosage": request.dosage,
-                "form": request.form,
-            }),
-        }
+        medicine = db.create_medicine(
+            medicine_data
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create medicine: {exc}",
         ) from exc
 
+    return {
+        "success": True,
+        "message": "Medicine created successfully",
+        "medicine": format_medicine(medicine),
+    }
+
 
 @app.get("/api/medicines")
 def get_medicines():
+
+    medicines = db.list_medicines()
+
+    formatted = [
+        format_medicine(medicine)
+        for medicine in medicines
+    ]
+
     return {
-        "count": len(db.list_medicines()),
-        "medicines": db.list_medicines(),
+        "count": len(formatted),
+        "medicines": formatted,
     }
 
 
 @app.get("/api/medicines/{medicine_id}")
 def get_medicine(medicine_id: int):
 
-    medicine = db.get_medicine(medicine_id)
+    medicine = db.get_medicine(
+        medicine_id
+    )
 
     if not medicine:
         raise HTTPException(
@@ -942,9 +1023,7 @@ def get_medicine(medicine_id: int):
             detail="Medicine not found",
         )
 
-    return medicine
-
-
+    return format_medicine(medicine)
 # =========================================================
 # ORGANIZATIONS
 # =========================================================

@@ -59,8 +59,18 @@ export default function LoginPage() {
       setSuccess("Login successful! Redirecting...");
 
       setTimeout(() => {
-        router.push("/");
-      }, 1000);
+  const role = String(data.user?.role || "").toLowerCase();
+
+  if (role === "manufacturer") {
+    router.push("/manufacturer/dashboard");
+  } else if (role === "distributor") {
+    router.push("/distributor/dashboard");
+  } else if (role === "pharmacy") {
+    router.push("/pharmacy/dashboard");
+  } else {
+    router.push("/");
+  }
+}, 1000);
     } catch (err) {
       setError(
         err instanceof Error
