@@ -72,6 +72,7 @@ app.add_middleware(
 def register_user(request: RegisterRequest):
 
     email = request.email.lower().strip()
+    organization_name = request.organization.strip()
 
     existing_user = db.get_user_by_email(email)
 
@@ -84,13 +85,33 @@ def register_user(request: RegisterRequest):
     try:
         password_hash = hash_password(request.password)
 
+        # -------------------------------------------------
+        # CREATE USER
+        # -------------------------------------------------
+
         user = db.create_user(
             full_name=request.full_name,
-            organization=request.organization,
+            organization=organization_name,
             email=email,
             password_hash=password_hash,
             role=request.role,
         )
+
+        # -------------------------------------------------
+        # CREATE ORGANIZATION IF IT DOES NOT EXIST
+        # -------------------------------------------------
+
+        organization = db.get_organization_by_name(
+            organization_name
+        )
+
+        if not organization:
+            organization = db.create_organization({
+                "name": organization_name,
+                "type": request.role,
+                "license_number": f"PENDING-{email}",
+                "address": "Not provided",
+            })
 
     except Exception as exc:
         raise HTTPException(
@@ -107,6 +128,7 @@ def register_user(request: RegisterRequest):
             "email": user["email"],
             "role": user["role"],
         },
+        "organization": organization,
     }
 
 
