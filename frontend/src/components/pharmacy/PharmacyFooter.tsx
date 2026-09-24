@@ -1,14 +1,18 @@
 import Link from "next/link";
 import { ShieldCheck } from "lucide-react";
 
-export default function Footer() {
+export default function PharmacyFooter() {
   return (
     <footer className="mt-auto bg-[#101828] text-white">
       <div className="mx-auto max-w-7xl px-6 py-10">
         <div className="grid gap-8 md:grid-cols-3">
 
+          {/* Brand */}
           <div>
-            <Link href="/" className="inline-flex items-center gap-3">
+            <Link
+              href="/"
+              className="inline-flex items-center gap-3"
+            >
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#00A878]">
                 <ShieldCheck size={22} />
               </div>
@@ -31,6 +35,7 @@ export default function Footer() {
             </p>
           </div>
 
+          {/* Pharmacy Portal */}
           <div>
             <h3 className="text-sm font-bold text-white">
               Pharmacy Portal
@@ -38,28 +43,28 @@ export default function Footer() {
 
             <div className="mt-4 flex flex-col gap-3">
               <Link
-                href="/dashboard"
+                href="/pharmacy/dashboard"
                 className="text-sm text-[#98A2B3] hover:text-white"
               >
                 Dashboard
               </Link>
 
               <Link
-                href="/incoming"
+                href="/pharmacy/incoming"
                 className="text-sm text-[#98A2B3] hover:text-white"
               >
                 Incoming Medicines
               </Link>
 
               <Link
-                href="/inventory"
+                href="/pharmacy/inventory"
                 className="text-sm text-[#98A2B3] hover:text-white"
               >
                 Inventory
               </Link>
 
               <Link
-                href="/verification"
+                href="/pharmacy/verification"
                 className="text-sm text-[#98A2B3] hover:text-white"
               >
                 Verification
@@ -67,6 +72,7 @@ export default function Footer() {
             </div>
           </div>
 
+          {/* Supply Chain Trust */}
           <div>
             <h3 className="text-sm font-bold text-white">
               Supply Chain Trust
@@ -85,6 +91,7 @@ export default function Footer() {
 
         </div>
 
+        {/* Bottom */}
         <div className="mt-10 border-t border-[#344054] pt-5">
           <div className="flex flex-col gap-2 text-xs text-[#98A2B3] sm:flex-row sm:items-center sm:justify-between">
             <p>© 2026 mediSure. All rights reserved.</p>

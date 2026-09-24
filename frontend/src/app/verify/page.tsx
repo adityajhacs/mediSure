@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -11,6 +12,8 @@ import {
   X,
   AlertTriangle,
   Loader2,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 
@@ -32,6 +35,19 @@ type VerificationResult = {
   reason?: string;
 };
 
+type OfflineQRData = {
+  version?: number;
+  batch_id?: string;
+  medicine_name?: string;
+  manufacturer?: string;
+  current_owner?: string;
+  status?: string;
+  qr_code?: string;
+  product_id?: string;
+  serial_number?: string;
+  qr_payload?: string;
+};
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 
@@ -41,15 +57,38 @@ export default function VerifyPage() {
 
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+
   const [verification, setVerification] =
     useState<VerificationResult | null>(null);
+
+  const [offlineQR, setOfflineQR] =
+    useState<OfflineQRData | null>(null);
+
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [isVerifying, setIsVerifying] = useState(false);
+
   const [error, setError] = useState("");
   const [history, setHistory] = useState<any[]>([]);
-const [showHistory, setShowHistory] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
   // Extract batch ID from QR content
   const extractBatchId = (decodedText: string) => {
     const value = decodedText.trim();
+
+    // JSON QR
+    try {
+      const parsed = JSON.parse(value);
+
+      if (parsed?.batch_id) {
+        return String(parsed.batch_id);
+      }
+
+      if (parsed?.qr_code) {
+        return String(parsed.qr_code);
+      }
+    } catch {
+      // Not JSON — continue with normal QR handling.
+    }
 
     // Normal QR: MED-005
     if (!value.startsWith("http")) {
@@ -81,53 +120,201 @@ const [showHistory, setShowHistory] = useState(false);
     return value;
   };
 
-  // Call FastAPI verification API
+  // Read self-contained information stored inside QR
+  const parseOfflineQR = (
+    decodedText: string
+  ): OfflineQRData | null => {
+    try {
+      const parsed = JSON.parse(decodedText);
+
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        !parsed.batch_id
+      ) {
+        return null;
+      }
+
+      return {
+        version: parsed.version,
+        batch_id: parsed.batch_id,
+        medicine_name: parsed.medicine_name,
+        manufacturer: parsed.manufacturer,
+        current_owner: parsed.current_owner,
+        status: parsed.status,
+        qr_code: parsed.qr_code,
+        product_id: parsed.product_id,
+        serial_number: parsed.serial_number,
+        qr_payload: parsed.qr_payload,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  // Convert QR payload into a display-only offline result.
+  // This is NOT a cryptographic authenticity verdict.
+  const createOfflineResult = (
+    qrData: OfflineQRData
+  ): VerificationResult => {
+    const currentOwner = qrData.current_owner || "";
+
+    const isPharmacy =
+      currentOwner.toLowerCase().includes("pharmacy");
+
+    return {
+      batch_id: qrData.batch_id || "Unknown",
+      medicine_name:
+        qrData.medicine_name || "Unknown medicine",
+
+      // Offline QR data is informational only.
+      // Do not claim final authenticity offline.
+      status: "SUSPICIOUS",
+
+      manufacturer: qrData.manufacturer || null,
+      distributor: null,
+      pharmacy: isPharmacy ? currentOwner : null,
+
+      manufacturer_verified: !!qrData.manufacturer,
+      distributor_verified: false,
+      pharmacy_verified: isPharmacy,
+
+      blockchain_verified: false,
+      cold_chain_verified: false,
+
+      temperature_status: "Not checked offline",
+
+      trust_score: 0,
+
+      reasons: [
+        "Offline QR data is available.",
+        "Full supply-chain verification requires an internet connection.",
+      ],
+    };
+  };
+
+  // Main verification flow:
+  // 1. Read QR locally.
+  // 2. Immediately show QR data.
+  // 3. Try online verification.
+  // 4. If online works, replace offline result with real verification.
   const verifyBatch = async (decodedText: string) => {
     const batchId = extractBatchId(decodedText);
 
     if (!batchId) {
-      setError("Could not read a valid medicine batch ID from the QR code.");
+      setError(
+        "Could not read a valid medicine batch ID from the QR code."
+      );
       return;
     }
 
-    setIsVerifying(true);
     setError("");
-    setVerification(null);
+    setHistory([]);
+    setShowHistory(false);
+
+    // --------------------------------------------------
+    // OFFLINE STEP
+    // --------------------------------------------------
+
+    const qrData = parseOfflineQR(decodedText);
+
+    if (qrData) {
+      const offlineResult = createOfflineResult(qrData);
+
+      setOfflineQR(qrData);
+      setVerification(offlineResult);
+      setIsOfflineMode(true);
+    } else {
+      setOfflineQR(null);
+      setIsOfflineMode(false);
+      setVerification(null);
+    }
+
+    // --------------------------------------------------
+    // ONLINE STEP
+    // --------------------------------------------------
+
+    setIsVerifying(true);
 
     try {
       const response = await fetch(
-        `${API_URL}/api/verify/${encodeURIComponent(batchId)}`
+        `${API_URL}/api/verify/${encodeURIComponent(batchId)}`,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
       );
 
       const data = await response.json();
 
       if (!response.ok) {
         throw new Error(
-          data?.detail || "Unable to verify this medicine batch."
+          data?.detail ||
+            "Unable to verify this medicine batch."
         );
       }
 
+      // Real online verification result
       setVerification(data);
-      const historyResponse = await fetch(
-  `${API_URL}/api/batches/${encodeURIComponent(batchId)}/history`
-);
+      setIsOfflineMode(false);
 
-if (historyResponse.ok) {
-  const historyData = await historyResponse.json();
-  setHistory(historyData.history || []);
-}
+      // ------------------------------------------------
+      // Load online supply-chain history
+      // ------------------------------------------------
+
+      try {
+        const historyResponse = await fetch(
+          `${API_URL}/api/batches/${encodeURIComponent(
+            batchId
+          )}/history`,
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        );
+
+        if (historyResponse.ok) {
+          const historyData =
+            await historyResponse.json();
+
+          setHistory(historyData.history || []);
+        }
+      } catch (historyError) {
+        console.log(
+          "History unavailable:",
+          historyError
+        );
+      }
     } catch (err) {
-      console.error("Verification API error:", err);
-
-      setError(
-        "Unable to connect to the verification server. Please make sure the mediSure backend is running."
+      console.log(
+        "Online verification unavailable. Using offline QR data.",
+        err
       );
+
+      // QR JSON exists:
+      // keep the already displayed offline information.
+      if (qrData) {
+        setIsOfflineMode(true);
+
+        setError(
+          "Offline mode: showing the information stored in the QR code. Full online verification is unavailable."
+        );
+      } else {
+        setVerification(null);
+        setIsOfflineMode(false);
+
+        setError(
+          "Unable to connect to the verification server. Please make sure the mediSure backend is running."
+        );
+      }
     } finally {
       setIsVerifying(false);
     }
   };
 
-  const handleSuccessfulScan = async (decodedText: string) => {
+  const handleSuccessfulScan = async (
+    decodedText: string
+  ) => {
     console.log("QR CODE:", decodedText);
 
     setScanResult(decodedText);
@@ -149,6 +336,10 @@ if (historyResponse.ok) {
     setError("");
     setScanResult(null);
     setVerification(null);
+    setOfflineQR(null);
+    setIsOfflineMode(false);
+    setHistory([]);
+    setShowHistory(false);
 
     if (scannerRef.current) {
       return;
@@ -216,6 +407,10 @@ if (historyResponse.ok) {
     setError("");
     setScanResult(null);
     setVerification(null);
+    setOfflineQR(null);
+    setIsOfflineMode(false);
+    setHistory([]);
+    setShowHistory(false);
 
     try {
       if (scannerRef.current) {
@@ -232,11 +427,15 @@ if (historyResponse.ok) {
 
       scannerRef.current = scanner;
 
-      const decodedText = await scanner.scanFile(file, true);
+      const decodedText = await scanner.scanFile(
+        file,
+        true
+      );
 
       console.log("QR FROM IMAGE:", decodedText);
 
       setScanResult(decodedText);
+
       scannerRef.current = null;
 
       try {
@@ -260,7 +459,11 @@ if (historyResponse.ok) {
   const scanAgain = async () => {
     setScanResult(null);
     setVerification(null);
+    setOfflineQR(null);
+    setIsOfflineMode(false);
     setError("");
+    setHistory([]);
+    setShowHistory(false);
 
     setTimeout(() => {
       startScanner();
@@ -275,21 +478,29 @@ if (historyResponse.ok) {
     };
   }, []);
 
-  const isVerified = verification?.status === "VERIFIED";
+  const isVerified =
+    verification?.status === "VERIFIED";
 
   return (
     <main className="min-h-screen bg-[#F8FAFC] text-[#101828]">
       {/* NAVBAR */}
       <nav className="border-b border-[#E4E7EC] bg-white">
         <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-6 lg:px-8">
-          <Link href="/" className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="flex items-center gap-3"
+          >
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#00A878]">
               <ShieldCheck className="h-5 w-5 text-white" />
             </div>
 
             <div className="text-[26px] font-bold tracking-tight">
-              <span className="text-[#101828]">medi</span>
-              <span className="text-[#F97316]">Sure</span>
+              <span className="text-[#101828]">
+                medi
+              </span>
+              <span className="text-[#F97316]">
+                Sure
+              </span>
             </div>
           </Link>
 
@@ -306,6 +517,7 @@ if (historyResponse.ok) {
       {/* CONTENT */}
       <section className="relative min-h-[calc(100vh-76px)] overflow-hidden">
         <div className="pointer-events-none absolute -left-40 top-20 h-96 w-96 rounded-full bg-[#ECFDF5] opacity-60 blur-3xl" />
+
         <div className="pointer-events-none absolute -right-40 bottom-0 h-96 w-96 rounded-full bg-[#ECFDF5] opacity-60 blur-3xl" />
 
         <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 py-12 lg:grid-cols-[0.8fr_1.2fr] lg:py-16">
@@ -318,12 +530,15 @@ if (historyResponse.ok) {
             <h1 className="mt-4 text-4xl font-bold leading-tight md:text-5xl">
               Scan the
               <br />
-              <span className="text-[#00A878]">QR code.</span>
+              <span className="text-[#00A878]">
+                QR code.
+              </span>
             </h1>
 
             <p className="mt-5 max-w-md text-lg leading-8 text-[#667085]">
-              Scan the QR code printed on the medicine package to verify its
-              authenticity and trace its journey.
+              Scan the QR code printed on the medicine
+              package to verify its authenticity and trace
+              its journey.
             </p>
 
             <div className="mt-8 rounded-2xl border border-[#A7F3D0] bg-[#ECFDF5] p-5">
@@ -331,11 +546,13 @@ if (historyResponse.ok) {
                 <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#00A878]" />
 
                 <div>
-                  <p className="font-semibold">Your camera is safe</p>
+                  <p className="font-semibold">
+                    Your camera is safe
+                  </p>
 
                   <p className="mt-1 text-sm leading-6 text-[#667085]">
-                    Camera access is used only for reading the medicine QR
-                    code. No photo is stored.
+                    Camera access is used only for reading
+                    the medicine QR code. No photo is stored.
                   </p>
                 </div>
               </div>
@@ -353,22 +570,25 @@ if (historyResponse.ok) {
                 />
 
                 {/* INITIAL */}
-                {!isScanning && !scanResult && !isVerifying && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101828] px-6 text-center">
-                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/10">
-                      <QrCode className="h-10 w-10 text-white" />
+                {!isScanning &&
+                  !scanResult &&
+                  !isVerifying && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101828] px-6 text-center">
+                      <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/10">
+                        <QrCode className="h-10 w-10 text-white" />
+                      </div>
+
+                      <h2 className="mt-6 text-2xl font-bold text-white">
+                        Scan your medicine
+                      </h2>
+
+                      <p className="mt-2 max-w-sm text-sm leading-6 text-[#98A2B3]">
+                        Allow camera access and place the
+                        medicine QR code inside the scanning
+                        frame.
+                      </p>
                     </div>
-
-                    <h2 className="mt-6 text-2xl font-bold text-white">
-                      Scan your medicine
-                    </h2>
-
-                    <p className="mt-2 max-w-sm text-sm leading-6 text-[#98A2B3]">
-                      Allow camera access and place the medicine QR code inside
-                      the scanning frame.
-                    </p>
-                  </div>
-                )}
+                  )}
 
                 {/* SCANNING */}
                 {isScanning && (
@@ -376,8 +596,11 @@ if (historyResponse.ok) {
                     <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                       <div className="relative h-[260px] w-[260px]">
                         <div className="absolute left-0 top-0 h-12 w-12 border-l-4 border-t-4 border-[#00A878]" />
+
                         <div className="absolute right-0 top-0 h-12 w-12 border-r-4 border-t-4 border-[#00A878]" />
+
                         <div className="absolute bottom-0 left-0 h-12 w-12 border-b-4 border-l-4 border-[#00A878]" />
+
                         <div className="absolute bottom-0 right-0 h-12 w-12 border-b-4 border-r-4 border-[#00A878]" />
 
                         <div className="absolute left-5 right-5 top-1/2 h-0.5 bg-[#00A878] shadow-[0_0_12px_#00A878]" />
@@ -400,33 +623,80 @@ if (historyResponse.ok) {
                   </>
                 )}
 
-                {/* VERIFYING */}
+                {/* VERIFYING ONLINE */}
                 {isVerifying && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101828] px-8 text-center">
                     <Loader2 className="h-14 w-14 animate-spin text-[#00A878]" />
 
                     <h2 className="mt-6 text-2xl font-bold text-white">
-                      Verifying medicine...
+                      Checking online verification...
                     </h2>
 
                     <p className="mt-2 text-sm text-[#98A2B3]">
-                      Checking the medicine supply chain.
+                      Your QR data is already available. We
+                      are checking the complete supply chain.
                     </p>
                   </div>
                 )}
 
-                {/* VERIFIED / SUSPICIOUS */}
+                {/* RESULT */}
                 {verification && !isVerifying && (
                   <div className="absolute inset-0 overflow-y-auto bg-[#F8FAFC] p-5 text-left">
+                    {/* OFFLINE / ONLINE STATUS */}
+                    <div
+                      className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 ${
+                        isOfflineMode
+                          ? "border-amber-200 bg-amber-50"
+                          : "border-[#A7F3D0] bg-[#ECFDF5]"
+                      }`}
+                    >
+                      {isOfflineMode ? (
+                        <>
+                          <WifiOff className="h-5 w-5 text-amber-600" />
+
+                          <div>
+                            <p className="text-sm font-semibold text-amber-700">
+                              OFFLINE QR DATA
+                            </p>
+
+                            <p className="text-xs text-amber-600">
+                              Showing information stored inside
+                              the QR code.
+                            </p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Wifi className="h-5 w-5 text-[#00A878]" />
+
+                          <div>
+                            <p className="text-sm font-semibold text-[#008F68]">
+                              ONLINE VERIFIED
+                            </p>
+
+                            <p className="text-xs text-[#667085]">
+                              Full supply-chain verification
+                              completed.
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* STATUS CARD */}
                     <div
                       className={`rounded-2xl border p-5 ${
-                        isVerified
-                          ? "border-[#A7F3D0] bg-[#ECFDF5]"
-                          : "border-red-200 bg-red-50"
+                        isOfflineMode
+                          ? "border-amber-200 bg-amber-50"
+                          : isVerified
+                            ? "border-[#A7F3D0] bg-[#ECFDF5]"
+                            : "border-red-200 bg-red-50"
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        {isVerified ? (
+                        {isOfflineMode ? (
+                          <WifiOff className="h-10 w-10 text-amber-600" />
+                        ) : isVerified ? (
                           <CheckCircle2 className="h-10 w-10 text-[#00A878]" />
                         ) : (
                           <AlertTriangle className="h-10 w-10 text-red-500" />
@@ -435,12 +705,18 @@ if (historyResponse.ok) {
                         <div>
                           <p
                             className={`text-xl font-bold ${
-                              isVerified
-                                ? "text-[#008F68]"
-                                : "text-red-600"
+                              isOfflineMode
+                                ? "text-amber-700"
+                                : isVerified
+                                  ? "text-[#008F68]"
+                                  : "text-red-600"
                             }`}
                           >
-                            {isVerified ? "VERIFIED" : "SUSPICIOUS"}
+                            {isOfflineMode
+                              ? "OFFLINE QR DATA"
+                              : isVerified
+                                ? "VERIFIED"
+                                : "SUSPICIOUS"}
                           </p>
 
                           <p className="text-sm text-[#667085]">
@@ -449,141 +725,252 @@ if (historyResponse.ok) {
                         </div>
                       </div>
                     </div>
-                    {history.length > 0 && (
-  <div className="mt-4 rounded-2xl border border-[#E4E7EC] bg-white p-5">
-    <div className="flex items-center justify-between">
-      <p className="font-semibold text-[#101828]">
-        Supply Chain History
-      </p>
 
-      <button
-        type="button"
-        onClick={() => setShowHistory((prev) => !prev)}
-        className="text-sm font-semibold text-[#00A878] hover:text-[#008F68]"
-      >
-        {showHistory ? "Hide" : "View History"}
-      </button>
-    </div>
+                    {/* QR STORED INFORMATION */}
+                    {isOfflineMode && offlineQR && (
+                      <div className="mt-4 rounded-2xl border border-amber-200 bg-white p-5">
+                        <p className="font-semibold text-[#101828]">
+                          Information Stored in QR
+                        </p>
 
-    {showHistory && (
-      <div className="mt-5 space-y-4">
-        {history.map((item, index) => (
-          <div
-            key={index}
-            className="flex gap-3 border-l-2 border-[#A7F3D0] pl-4"
-          >
-            <div>
-              <p className="font-semibold text-[#101828]">
-                {item.action}
-              </p>
+                        <div className="mt-4 space-y-3 text-sm">
+                          <InfoRow
+                            label="Medicine"
+                            value={
+                              offlineQR.medicine_name
+                            }
+                          />
 
-              {item.actor && (
-                <p className="text-sm text-[#667085]">
-                  Actor: {item.actor}
-                </p>
-              )}
+                          <InfoRow
+                            label="Batch ID"
+                            value={offlineQR.batch_id}
+                          />
 
-              {item.from && item.to && (
-                <p className="text-sm text-[#667085]">
-                  {item.from} → {item.to}
-                </p>
-              )}
+                          <InfoRow
+                            label="Manufacturer"
+                            value={
+                              offlineQR.manufacturer
+                            }
+                          />
 
-              {item.stage && (
-                <p className="text-sm text-[#667085]">
-                  Stage: {item.stage}
-                </p>
-              )}
+                          <InfoRow
+                            label="Current Owner"
+                            value={
+                              offlineQR.current_owner
+                            }
+                          />
 
-              {item.timestamp && (
-                <p className="mt-1 text-xs text-[#98A2B3]">
-                  {new Date(item.timestamp).toLocaleString()}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-  </div>
-)}
+                          <InfoRow
+                            label="Product ID"
+                            value={offlineQR.product_id}
+                          />
+
+                          <InfoRow
+                            label="Serial Number"
+                            value={
+                              offlineQR.serial_number
+                            }
+                          />
+
+                          <InfoRow
+                            label="QR Payload"
+                            value={offlineQR.qr_payload}
+                          />
+
+                          <InfoRow
+                            label="Stored Status"
+                            value={offlineQR.status}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ONLINE MEDICINE CARD */}
                     <div className="mt-4 rounded-2xl border border-[#E4E7EC] bg-white p-5">
                       <p className="text-sm font-medium text-[#667085]">
                         Medicine
                       </p>
 
                       <p className="mt-1 text-lg font-bold">
-                        {verification.medicine_name || "Unknown medicine"}
+                        {verification.medicine_name ||
+                          "Unknown medicine"}
                       </p>
 
-                      <div className="mt-4 flex items-end justify-between">
-                        <div>
-                          <p className="text-sm text-[#667085]">
-                            Trust Score
-                          </p>
+                      {!isOfflineMode && (
+                        <div className="mt-4 flex items-end justify-between">
+                          <div>
+                            <p className="text-sm text-[#667085]">
+                              Trust Score
+                            </p>
 
-                          <p className="text-3xl font-bold text-[#00A878]">
-                            {verification.trust_score}/100
+                            <p className="text-3xl font-bold text-[#00A878]">
+                              {verification.trust_score}/100
+                            </p>
+                          </div>
+
+                          <div className="text-right">
+                            <p className="text-sm text-[#667085]">
+                              Temperature
+                            </p>
+
+                            <p className="font-semibold">
+                              {verification.temperature_status ||
+                                "N/A"}
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {isOfflineMode && (
+                        <div className="mt-4 rounded-xl bg-amber-50 p-3">
+                          <p className="text-sm font-medium text-amber-700">
+                            Trust score is available only after
+                            online verification.
                           </p>
                         </div>
+                      )}
+                    </div>
 
-                        <div className="text-right">
-                          <p className="text-sm text-[#667085]">
-                            Temperature
-                          </p>
+                    {/* ONLINE SUPPLY CHAIN */}
+                    {!isOfflineMode && (
+                      <div className="mt-4 rounded-2xl border border-[#E4E7EC] bg-white p-5">
+                        <p className="font-semibold">
+                          Supply Chain
+                        </p>
 
-                          <p className="font-semibold">
-                            {verification.temperature_status || "N/A"}
-                          </p>
+                        <div className="mt-4 space-y-3 text-sm">
+                          <StatusRow
+                            label="Manufacturer"
+                            value={
+                              verification.manufacturer
+                            }
+                            verified={
+                              verification.manufacturer_verified
+                            }
+                          />
+
+                          <StatusRow
+                            label="Distributor"
+                            value={
+                              verification.distributor
+                            }
+                            verified={
+                              verification.distributor_verified
+                            }
+                          />
+
+                          <StatusRow
+                            label="Pharmacy"
+                            value={verification.pharmacy}
+                            verified={
+                              verification.pharmacy_verified
+                            }
+                          />
+
+                          <StatusRow
+                            label="Blockchain"
+                            value={
+                              verification.blockchain_verified
+                                ? "Verified"
+                                : "Not Verified"
+                            }
+                            verified={
+                              verification.blockchain_verified
+                            }
+                          />
+
+                          <StatusRow
+                            label="Cold Chain"
+                            value={
+                              verification.cold_chain_verified
+                                ? "Safe"
+                                : "Violation"
+                            }
+                            verified={
+                              verification.cold_chain_verified
+                            }
+                          />
                         </div>
                       </div>
-                    </div>
+                    )}
 
-                    <div className="mt-4 rounded-2xl border border-[#E4E7EC] bg-white p-5">
-                      <p className="font-semibold">Supply Chain</p>
+                    {/* ONLINE HISTORY */}
+                    {!isOfflineMode &&
+                      history.length > 0 && (
+                        <div className="mt-4 rounded-2xl border border-[#E4E7EC] bg-white p-5">
+                          <div className="flex items-center justify-between">
+                            <p className="font-semibold text-[#101828]">
+                              Supply Chain History
+                            </p>
 
-                      <div className="mt-4 space-y-3 text-sm">
-                        <StatusRow
-                          label="Manufacturer"
-                          value={verification.manufacturer}
-                          verified={verification.manufacturer_verified}
-                        />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowHistory(
+                                  (prev) => !prev
+                                )
+                              }
+                              className="text-sm font-semibold text-[#00A878] hover:text-[#008F68]"
+                            >
+                              {showHistory
+                                ? "Hide"
+                                : "View History"}
+                            </button>
+                          </div>
 
-                        <StatusRow
-                          label="Distributor"
-                          value={verification.distributor}
-                          verified={verification.distributor_verified}
-                        />
+                          {showHistory && (
+                            <div className="mt-5 space-y-4">
+                              {history.map(
+                                (item, index) => (
+                                  <div
+                                    key={index}
+                                    className="flex gap-3 border-l-2 border-[#A7F3D0] pl-4"
+                                  >
+                                    <div>
+                                      <p className="font-semibold text-[#101828]">
+                                        {item.action}
+                                      </p>
 
-                        <StatusRow
-                          label="Pharmacy"
-                          value={verification.pharmacy}
-                          verified={verification.pharmacy_verified}
-                        />
+                                      {item.actor && (
+                                        <p className="text-sm text-[#667085]">
+                                          Actor: {item.actor}
+                                        </p>
+                                      )}
 
-                        <StatusRow
-                          label="Blockchain"
-                          value={
-                            verification.blockchain_verified
-                              ? "Verified"
-                              : "Not Verified"
-                          }
-                          verified={verification.blockchain_verified}
-                        />
+                                      {item.from &&
+                                        item.to && (
+                                          <p className="text-sm text-[#667085]">
+                                            {item.from} →{" "}
+                                            {item.to}
+                                          </p>
+                                        )}
 
-                        <StatusRow
-                          label="Cold Chain"
-                          value={
-                            verification.cold_chain_verified
-                              ? "Safe"
-                              : "Violation"
-                          }
-                          verified={verification.cold_chain_verified}
-                        />
-                      </div>
-                    </div>
+                                      {item.stage && (
+                                        <p className="text-sm text-[#667085]">
+                                          Stage:{" "}
+                                          {item.stage}
+                                        </p>
+                                      )}
 
-                    {verification.reasons &&
+                                      {item.timestamp && (
+                                        <p className="mt-1 text-xs text-[#98A2B3]">
+                                          {new Date(
+                                            item.timestamp
+                                          ).toLocaleString()}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                    {/* ONLINE VERIFICATION ISSUES */}
+                    {!isOfflineMode &&
+                      verification.reasons &&
                       verification.reasons.length > 0 && (
                         <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-5">
                           <p className="font-semibold text-red-700">
@@ -591,70 +978,106 @@ if (historyResponse.ok) {
                           </p>
 
                           <ul className="mt-3 space-y-2 text-sm text-red-600">
-                            {verification.reasons.map((reason, index) => (
-                              <li key={index}>• {reason}</li>
-                            ))}
+                            {verification.reasons.map(
+                              (reason, index) => (
+                                <li key={index}>
+                                  • {reason}
+                                </li>
+                              )
+                            )}
                           </ul>
                         </div>
                       )}
+
+                    {/* OFFLINE EXPLANATION */}
+                    {isOfflineMode && (
+                      <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                        <p className="font-semibold text-amber-700">
+                          What does offline mode mean?
+                        </p>
+
+                        <p className="mt-2 text-sm leading-6 text-amber-700">
+                          The QR code contains medicine
+                          information that can be read without
+                          internet. Full authenticity verification,
+                          blockchain checks, cold-chain checks and
+                          duplicate detection require the online
+                          verification service.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {/* RAW QR DETECTED BUT API NOT YET SHOWN */}
-                {scanResult && !verification && !isVerifying && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101828] px-8 text-center">
-                    <CheckCircle2 className="h-16 w-16 text-[#00A878]" />
+                {/* RAW QR DETECTED */}
+                {scanResult &&
+                  !verification &&
+                  !isVerifying && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101828] px-8 text-center">
+                      <CheckCircle2 className="h-16 w-16 text-[#00A878]" />
 
-                    <h2 className="mt-5 text-2xl font-bold text-white">
-                      QR Code Detected
-                    </h2>
+                      <h2 className="mt-5 text-2xl font-bold text-white">
+                        QR Code Detected
+                      </h2>
 
-                    <p className="mt-3 max-w-md break-all text-sm text-[#98A2B3]">
-                      {scanResult}
-                    </p>
-                  </div>
-                )}
+                      <p className="mt-3 max-w-md break-all text-sm text-[#98A2B3]">
+                        {scanResult}
+                      </p>
+                    </div>
+                  )}
               </div>
 
               {/* CONTROLS */}
               <div className="p-6">
                 {error && (
-                  <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-600">
+                  <div
+                    className={`mb-4 rounded-xl border p-4 text-sm ${
+                      isOfflineMode
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-red-200 bg-red-50 text-red-600"
+                    }`}
+                  >
                     {error}
                   </div>
                 )}
 
-                {!isScanning && !scanResult && !isVerifying && (
-                  <button
-                    type="button"
-                    onClick={startScanner}
-                    className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#00A878] py-3.5 font-semibold text-white transition hover:bg-[#008F68]"
-                  >
-                    <QrCode className="h-5 w-5" />
-                    Open Camera & Scan
-                  </button>
-                )}
-
-                {!isScanning && !scanResult && !isVerifying && (
-                  <>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageUpload}
-                      className="hidden"
-                    />
-
+                {!isScanning &&
+                  !scanResult &&
+                  !isVerifying && (
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[#D0D5DD] bg-white py-3.5 font-semibold text-[#101828] transition hover:border-[#00A878] hover:text-[#00A878]"
+                      onClick={startScanner}
+                      className="flex h-13 w-full items-center justify-center gap-2 rounded-xl bg-[#00A878] py-3.5 font-semibold text-white transition hover:bg-[#008F68]"
                     >
-                      <ImageIcon className="h-5 w-5" />
-                      Upload QR Image
+                      <QrCode className="h-5 w-5" />
+                      Open Camera & Scan
                     </button>
-                  </>
-                )}
+                  )}
+
+                {!isScanning &&
+                  !scanResult &&
+                  !isVerifying && (
+                    <>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          fileInputRef.current?.click()
+                        }
+                        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[#D0D5DD] bg-white py-3.5 font-semibold text-[#101828] transition hover:border-[#00A878] hover:text-[#00A878]"
+                      >
+                        <ImageIcon className="h-5 w-5" />
+                        Upload QR Image
+                      </button>
+                    </>
+                  )}
 
                 {isScanning && (
                   <button
@@ -667,19 +1090,21 @@ if (historyResponse.ok) {
                   </button>
                 )}
 
-                {(verification || scanResult) && !isVerifying && (
-                  <button
-                    type="button"
-                    onClick={scanAgain}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#00A878] py-3.5 font-semibold text-white hover:bg-[#008F68]"
-                  >
-                    <QrCode className="h-5 w-5" />
-                    Scan Another Medicine
-                  </button>
-                )}
+                {(verification || scanResult) &&
+                  !isVerifying && (
+                    <button
+                      type="button"
+                      onClick={scanAgain}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#00A878] py-3.5 font-semibold text-white hover:bg-[#008F68]"
+                    >
+                      <QrCode className="h-5 w-5" />
+                      Scan Another Medicine
+                    </button>
+                  )}
 
                 <p className="mt-4 text-center text-xs text-[#98A2B3]">
-                  Camera is used only to scan the medicine QR code.
+                  QR information can be read offline. Full
+                  verification requires an internet connection.
                 </p>
               </div>
             </div>
@@ -702,7 +1127,10 @@ function StatusRow({
   return (
     <div className="flex items-center justify-between gap-4 border-b border-[#F2F4F7] pb-3 last:border-0 last:pb-0">
       <div>
-        <p className="font-medium text-[#101828]">{label}</p>
+        <p className="font-medium text-[#101828]">
+          {label}
+        </p>
+
         <p className="text-xs text-[#667085]">
           {value || "Not available"}
         </p>
@@ -717,6 +1145,26 @@ function StatusRow({
       >
         {verified ? "VERIFIED" : "NOT VERIFIED"}
       </div>
+    </div>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+}: {
+  label: string;
+  value?: string | null;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-[#F2F4F7] pb-3 last:border-0 last:pb-0">
+      <p className="shrink-0 font-medium text-[#475467]">
+        {label}
+      </p>
+
+      <p className="break-all text-right text-[#101828]">
+        {value || "Not available"}
+      </p>
     </div>
   );
 }

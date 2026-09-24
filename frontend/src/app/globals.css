@@ -2,7 +2,7 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #101828;
+  --foreground: #171717;
 }
 
 @theme inline {
@@ -12,23 +12,15 @@
   --font-mono: var(--font-geist-mono);
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html {
-  scroll-behavior: smooth;
-  margin: 0;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
 }
 
 body {
-  margin: 0;
   background: var(--background);
   color: var(--foreground);
-}
-
-button,
-a,
-input {
-  font: inherit;
+  font-family: Arial, Helvetica, sans-serif;
 }

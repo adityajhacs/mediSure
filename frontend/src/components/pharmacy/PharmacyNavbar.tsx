@@ -5,14 +5,14 @@ import Link from "next/link";
 import { Menu, ShieldCheck, X } from "lucide-react";
 
 const navLinks = [
-  { name: "Dashboard", href: "/dashboard" },
-  { name: "Incoming", href: "/incoming" },
-  { name: "Inventory", href: "/inventory" },
-  { name: "Verification", href: "/verification" },
-  { name: "Alerts", href: "/alerts" },
+  { name: "Dashboard", href: "/pharmacy/dashboard" },
+  { name: "Incoming", href: "/pharmacy/incoming" },
+  { name: "Inventory", href: "/pharmacy/inventory" },
+  { name: "Verification", href: "/pharmacy/verification" },
+  { name: "Alerts", href: "/pharmacy/alerts" },
 ];
 
-export default function Navbar() {
+export default function PharmacyNavbar() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
@@ -22,7 +22,7 @@ export default function Navbar() {
 
           {/* Logo */}
           <Link
-            href="/dashboard"
+            href="/pharmacy/dashboard"
             className="flex items-center gap-3"
             onClick={() => setMenuOpen(false)}
           >
